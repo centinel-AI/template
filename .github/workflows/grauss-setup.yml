@@ -15,7 +15,7 @@ on:
           - ovh
       project:
         description: >
-          Project name — used as data/<cloud>/<project>/ directory and TF_VAR_project.
+          Project name — used as TF_VAR_project.
           Lowercase alphanumeric and hyphens only (e.g. my-project).
         required: true
         type: string
@@ -33,7 +33,7 @@ jobs:
   setup:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Validate project name
         run: |
@@ -45,7 +45,7 @@ jobs:
 
       - name: Write grauss.json
         run: |
-          TEMPLATE_VERSION="$(cat VERSION)"
+          TEMPLATE_VERSION="$(jq -r '.template_version' grauss.json)"
           cat > grauss.json <<EOF
           {
             "cloud": "${{ inputs.cloud }}",
@@ -56,297 +56,33 @@ jobs:
           EOF
           sed -i 's/^  //' grauss.json
 
-      # ── Azure ──────────────────────────────────────────────────────────────────
-      - name: Generate data — Azure
-        if: inputs.cloud == 'azure'
-        run: |
-          PROJECT="${{ inputs.project }}"
-          COMPACT="${PROJECT//-/}"
-
-          # Bootstrap — provisions the remote state storage account (apply once with local state)
-          mkdir -p "data/azure/_bootstrap/resource_group"
-          mkdir -p "data/azure/_bootstrap/storage_account"
-          mkdir -p "data/azure/_bootstrap/storage_container"
-
-          cat > "data/azure/_bootstrap/resource_group/rg-$PROJECT-tfstate.json" <<EOF
-          {
-            "name": "rg-$PROJECT-tfstate",
-            "location": "REPLACE_WITH_LOCATION",
-            "tags": {"Project": "$PROJECT", "ManagedBy": "terraform"}
-          }
-          EOF
-
-          cat > "data/azure/_bootstrap/storage_account/st${COMPACT}tfstate.json" <<EOF
-          {
-            "name": "REPLACE_WITH_GLOBALLY_UNIQUE_STORAGE_ACCOUNT_NAME",
-            "resource_group_name": "rg-$PROJECT-tfstate",
-            "location": "REPLACE_WITH_LOCATION",
-            "account_tier": "Standard",
-            "account_replication_type": "LRS",
-            "tags": {"Project": "$PROJECT", "ManagedBy": "terraform"}
-          }
-          EOF
-
-          cat > "data/azure/_bootstrap/storage_container/tfstate.json" <<EOF
-          {
-            "name": "tfstate",
-            "storage_account_name": "REPLACE_WITH_GLOBALLY_UNIQUE_STORAGE_ACCOUNT_NAME",
-            "container_access_type": "private"
-          }
-          EOF
-
-          # Project starter skeleton
-          mkdir -p "data/azure/$PROJECT/resource_group"
-          mkdir -p "data/azure/$PROJECT/virtual_network"
-
-          cat > "data/azure/$PROJECT/resource_group/rg-$PROJECT.json" <<EOF
-          {
-            "name": "rg-$PROJECT",
-            "location": "REPLACE_WITH_LOCATION",
-            "tags": {"Project": "$PROJECT"}
-          }
-          EOF
-
-          cat > "data/azure/$PROJECT/virtual_network/vnet-$PROJECT.json" <<EOF
-          {
-            "name": "vnet-$PROJECT",
-            "location": "REPLACE_WITH_LOCATION",
-            "resource_group_name": "rg-$PROJECT",
-            "address_space": ["10.0.0.0/16"],
-            "tags": null
-          }
-          EOF
-
-          find data/azure -name "*.json" -exec sed -i 's/^  //' {} \;
-
-      # ── AWS ────────────────────────────────────────────────────────────────────
-      - name: Generate data — AWS
-        if: inputs.cloud == 'aws'
-        run: |
-          PROJECT="${{ inputs.project }}"
-
-          # Bootstrap — provisions the S3 state bucket and DynamoDB lock table
-          mkdir -p "data/aws/_bootstrap/s3_bucket"
-          mkdir -p "data/aws/_bootstrap/dynamodb_table"
-
-          cat > "data/aws/_bootstrap/s3_bucket/$PROJECT-tfstate-bootstrap.json" <<EOF
-          {
-            "bucket": "$PROJECT-tfstate-bootstrap",
-            "force_destroy": false,
-            "tags": {"Project": "$PROJECT", "ManagedBy": "terraform"}
-          }
-          EOF
-
-          cat > "data/aws/_bootstrap/dynamodb_table/$PROJECT-tfstate-locks.json" <<EOF
-          {
-            "name": "$PROJECT-tfstate-locks",
-            "billing_mode": "PAY_PER_REQUEST",
-            "hash_key": "LockID",
-            "attribute": [{"name": "LockID", "type": "S"}],
-            "tags": {"Project": "$PROJECT", "ManagedBy": "terraform"}
-          }
-          EOF
-
-          # Project starter skeleton
-          mkdir -p "data/aws/$PROJECT/vpc"
-
-          cat > "data/aws/$PROJECT/vpc/vpc-$PROJECT.json" <<EOF
-          {
-            "cidr_block": "10.0.0.0/16",
-            "enable_dns_support": true,
-            "enable_dns_hostnames": true,
-            "tags": {"Name": "vpc-$PROJECT", "Project": "$PROJECT"}
-          }
-          EOF
-
-          find data/aws -name "*.json" -exec sed -i 's/^  //' {} \;
-
-      # ── GCP ────────────────────────────────────────────────────────────────────
-      - name: Generate data — GCP
-        if: inputs.cloud == 'gcp'
-        run: |
-          PROJECT="${{ inputs.project }}"
-
-          # Bootstrap — provisions the GCS state bucket
-          mkdir -p "data/gcp/_bootstrap/storage_bucket"
-
-          cat > "data/gcp/_bootstrap/storage_bucket/$PROJECT-tfstate-bootstrap.json" <<EOF
-          {
-            "name": "$PROJECT-tfstate-bootstrap",
-            "location": "REPLACE_WITH_LOCATION",
-            "project": "REPLACE_WITH_GCP_PROJECT_ID",
-            "force_destroy": false,
-            "uniform_bucket_level_access": true,
-            "versioning": [{"enabled": true}],
-            "labels": {"project": "$PROJECT", "managed-by": "terraform"}
-          }
-          EOF
-
-          # Project starter skeleton
-          mkdir -p "data/gcp/$PROJECT/compute_network"
-
-          cat > "data/gcp/$PROJECT/compute_network/vpc-$PROJECT.json" <<EOF
-          {
-            "name": "vpc-$PROJECT",
-            "auto_create_subnetworks": false,
-            "description": "$PROJECT network"
-          }
-          EOF
-
-          find data/gcp -name "*.json" -exec sed -i 's/^  //' {} \;
-
-      # ── OCI ────────────────────────────────────────────────────────────────────
-      - name: Generate data — OCI
-        if: inputs.cloud == 'oci'
-        run: |
-          PROJECT="${{ inputs.project }}"
-
-          # Bootstrap — compartment + Object Storage bucket for remote state
-          mkdir -p "data/oci/_bootstrap/identity_compartment"
-          mkdir -p "data/oci/_bootstrap/objectstorage_bucket"
-
-          cat > "data/oci/_bootstrap/identity_compartment/compartment-$PROJECT-tfstate.json" <<EOF
-          {
-            "name": "compartment-$PROJECT-tfstate",
-            "compartment_id": "REPLACE_WITH_TENANCY_ROOT_COMPARTMENT_OCID",
-            "description": "Bootstrap compartment for $PROJECT remote state",
-            "defined_tags": null,
-            "freeform_tags": null,
-            "enable_delete": null,
-            "timeouts": null
-          }
-          EOF
-
-          cat > "data/oci/_bootstrap/objectstorage_bucket/$PROJECT-tfstate-bootstrap.json" <<EOF
-          {
-            "name": "$PROJECT-tfstate-bootstrap",
-            "namespace": "REPLACE_WITH_OBJECT_STORAGE_NAMESPACE",
-            "compartment_id": "REPLACE_WITH_BOOTSTRAP_COMPARTMENT_OCID",
-            "access_type": "NoPublicAccess",
-            "versioning": "Enabled",
-            "storage_tier": null,
-            "auto_tiering": null,
-            "kms_key_id": null,
-            "metadata": null,
-            "object_events_enabled": null,
-            "defined_tags": null,
-            "freeform_tags": null,
-            "retention_rules": null,
-            "timeouts": null
-          }
-          EOF
-
-          # Project starter skeleton
-          mkdir -p "data/oci/$PROJECT/identity_compartment"
-          mkdir -p "data/oci/$PROJECT/core_vcn"
-
-          cat > "data/oci/$PROJECT/identity_compartment/compartment-$PROJECT.json" <<EOF
-          {
-            "name": "compartment-$PROJECT",
-            "compartment_id": "REPLACE_WITH_TENANCY_OR_PARENT_COMPARTMENT_OCID",
-            "description": "$PROJECT compartment",
-            "defined_tags": null,
-            "freeform_tags": null,
-            "enable_delete": null,
-            "timeouts": null
-          }
-          EOF
-
-          cat > "data/oci/$PROJECT/core_vcn/vcn-$PROJECT.json" <<EOF
-          {
-            "cidr_block": "10.0.0.0/16",
-            "compartment_id": "REPLACE_WITH_COMPARTMENT_OCID",
-            "display_name": "vcn-$PROJECT",
-            "dns_label": "$(echo "$PROJECT" | tr -d '-' | cut -c1-15)",
-            "defined_tags": null,
-            "freeform_tags": null,
-            "timeouts": null
-          }
-          EOF
-
-          find data/oci -name "*.json" -exec sed -i 's/^  //' {} \;
-
-      # ── OVH ────────────────────────────────────────────────────────────────────
-      - name: Generate data — OVH
-        if: inputs.cloud == 'ovh'
-        run: |
-          PROJECT="${{ inputs.project }}"
-
-          # Bootstrap — OVH Object Storage for remote state (two-phase apply; see README).
-          # Phase 1: apply cloud_project_user only → get user ID from output.
-          # Phase 2: fill in user_id below, then apply again for the credential and bucket.
-          mkdir -p "data/ovh/_bootstrap/cloud_project_user"
-          mkdir -p "data/ovh/_bootstrap/cloud_project_user_s3_credential"
-          mkdir -p "data/ovh/_bootstrap/s3_bucket"
-
-          cat > "data/ovh/_bootstrap/cloud_project_user/user-$PROJECT-bootstrap.json" <<EOF
-          {
-            "description": "$PROJECT bootstrap user for S3-compatible state backend",
-            "role_names": ["objectstore_operator"]
-          }
-          EOF
-
-          cat > "data/ovh/_bootstrap/cloud_project_user_s3_credential/cred-$PROJECT-bootstrap.json" <<EOF
-          {
-            "user_id": "REPLACE_WITH_USER_ID_FROM_PHASE_1_APPLY"
-          }
-          EOF
-
-          cat > "data/ovh/_bootstrap/s3_bucket/$PROJECT-tfstate.json" <<EOF
-          {
-            "bucket": "$PROJECT-tfstate",
-            "force_destroy": false,
-            "tags": {"Project": "$PROJECT", "ManagedBy": "terraform"}
-          }
-          EOF
-
-          # Project starter skeleton
-          mkdir -p "data/ovh/$PROJECT/cloud_project_network_private"
-
-          cat > "data/ovh/$PROJECT/cloud_project_network_private/vlan-$PROJECT.json" <<EOF
-          {
-            "name": "vlan-$PROJECT",
-            "vlan_id": 100,
-            "regions": ["REPLACE_WITH_REGION"]
-          }
-          EOF
-
-          find data/ovh -name "*.json" -exec sed -i 's/^  //' {} \;
-
-      - name: Remove placeholder .gitkeep
-        run: rm -f data/.gitkeep
-
       - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add grauss.json data/
+          git add grauss.json
           git diff --staged --quiet && echo "Nothing to commit." || \
-            git commit -m "chore: initialize ${{ inputs.cloud }} project ${{ inputs.project }}"
+            git commit -m "chore: setup ${{ inputs.cloud }} project ${{ inputs.project }}"
           git push
 
       - name: Summary
         run: |
           CLOUD="${{ inputs.cloud }}"
           PROJECT="${{ inputs.project }}"
-          VERSION="${{ inputs.image_version }}"
-          TEMPLATE_VERSION="$(cat VERSION)"
+          TEMPLATE_VERSION="$(jq -r '.template_version' grauss.json)"
 
-          echo "### Grauss project initialized" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Grauss setup complete" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| | |" >> "$GITHUB_STEP_SUMMARY"
           echo "|--|--|" >> "$GITHUB_STEP_SUMMARY"
           echo "| **Cloud** | \`$CLOUD\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| **Project** | \`$PROJECT\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| **Image version** | \`$VERSION\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Image version** | \`${{ inputs.image_version }}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| **Template version** | \`$TEMPLATE_VERSION\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "#### Next steps" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "1. Set repository variable **\`GRAUSS_IMAGE_ORG\`** (org/user publishing Grauss engine images)." >> "$GITHUB_STEP_SUMMARY"
           echo "2. Configure the **$CLOUD** credential secrets in *Settings → Secrets and variables → Actions* (see \`README.md\`)." >> "$GITHUB_STEP_SUMMARY"
-          echo "3. Fill in all \`REPLACE_WITH_*\` placeholders in \`data/$CLOUD/_bootstrap/\` and apply it once to provision remote state storage (see \`README.md\` — bootstrap section)." >> "$GITHUB_STEP_SUMMARY"
-          if [ "$CLOUD" = "ovh" ]; then
-            echo "4. OVH bootstrap is two-phase — apply \`_bootstrap\` once to create the user, fill in the user ID, then apply again." >> "$GITHUB_STEP_SUMMARY"
-          fi
-          echo "5. Edit \`data/$CLOUD/$PROJECT/\` and push a branch to trigger a plan." >> "$GITHUB_STEP_SUMMARY"
+          echo "3. Replace all \`REPLACE_WITH_*\` placeholders in \`data/\` with your actual values." >> "$GITHUB_STEP_SUMMARY"
+          echo "4. Update \`data/backend.tf.json\` with your remote state backend details." >> "$GITHUB_STEP_SUMMARY"
