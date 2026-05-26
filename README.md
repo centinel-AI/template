@@ -96,20 +96,30 @@ Go to **Actions → Grauss setup → Run workflow** and fill in:
 | `project` | Project name (lowercase alphanumeric + hyphens, e.g. `networking`) |
 | `image_version` | Engine image version tag (e.g. `v0.1.0` or `latest`) |
 
-The workflow updates `grauss.json` and creates two empty directories:
+The workflow writes `grauss.json` with your choices and commits it.
+
+### 5. Add your infrastructure
+
+With `grauss.json` configured, start adding JSON resource files under `data/`. The recommended layout is:
 
 ```
-data/<cloud>/_bootstrap/    ← remote state infrastructure (fill in, apply once)
-data/<cloud>/<project>/     ← your infrastructure project
+data/
+├── _bootstrap/     ← remote state infrastructure (apply once, local state)
+│   └── <resource_type>/
+│       └── <name>.json
+└── <project>/      ← your infrastructure project
+    ├── backend.tf.json
+    └── <resource_type>/
+        └── <name>.json
 ```
 
-### 5. Bootstrap remote state
+One JSON file = one resource instance. Add a file to create the resource; delete it to destroy it.
 
-The `_bootstrap` project provisions the storage backend that holds Terraform state. It uses **local state** (no `backend.tf.json`) and is applied once.
+#### Bootstrap remote state
 
-Add the required JSON resource files for your cloud under `data/<cloud>/_bootstrap/`, then apply the bootstrap project. Once done, add a `backend.tf.json` to `data/<cloud>/<project>/` pointing to the resources it created.
+The `_bootstrap` project provisions the storage backend that holds Terraform state. It runs with **local state** (no `backend.tf.json`) and is applied once. Once done, add `backend.tf.json` to your project pointing to the resources it created.
 
-**Azure** — `data/azure/<project>/backend.tf.json`:
+**Azure** — `data/<project>/backend.tf.json`:
 ```json
 {
   "terraform": [{"backend": {"azurerm": {
@@ -122,7 +132,7 @@ Add the required JSON resource files for your cloud under `data/<cloud>/_bootstr
 }
 ```
 
-**AWS** — `data/aws/<project>/backend.tf.json`:
+**AWS** — `data/<project>/backend.tf.json`:
 ```json
 {
   "terraform": [{"backend": {"s3": {
@@ -135,7 +145,7 @@ Add the required JSON resource files for your cloud under `data/<cloud>/_bootstr
 }
 ```
 
-**GCP** — `data/gcp/<project>/backend.tf.json`:
+**GCP** — `data/<project>/backend.tf.json`:
 ```json
 {
   "terraform": [{"backend": {"gcs": {
@@ -145,7 +155,7 @@ Add the required JSON resource files for your cloud under `data/<cloud>/_bootstr
 }
 ```
 
-**OCI** — `data/oci/<project>/backend.tf.json`:
+**OCI** — `data/<project>/backend.tf.json`:
 ```json
 {
   "terraform": [{"backend": {"oci": {
@@ -157,7 +167,7 @@ Add the required JSON resource files for your cloud under `data/<cloud>/_bootstr
 }
 ```
 
-**OVH** — `data/ovh/<project>/backend.tf.json`:
+**OVH** — `data/<project>/backend.tf.json`:
 ```json
 {
   "terraform": [{"backend": {"s3": {
@@ -175,26 +185,12 @@ Add the required JSON resource files for your cloud under `data/<cloud>/_bootstr
 
 > **OVH bootstrap is two-phase:** the first apply creates the `cloud_project_user`; take the user ID from the output, add it to the `cloud_project_user_s3_credential` JSON file, then apply again to create the S3 credential and bucket.
 
-### 6. Configure the production environment (recommended)
-
-Go to **Settings → Environments → New environment**, create `production`, and add required reviewers so every apply requires approval.
-
 ## Repository structure
 
 ```
-grauss.json                               # cloud, project, image version, template version
-data/
-└── <cloud>/
-    ├── _bootstrap/                       # remote state infrastructure (apply once)
-    │   └── <resource_type>/
-    │       └── <name>.json
-    └── <project>/
-        ├── backend.tf.json               # remote state config (add after bootstrap)
-        └── <resource_type>/
-            └── <name>.json              # one file per resource instance
+grauss.json          # cloud, project, image version, template version
+data/                # JSON resource files (add your own)
 ```
-
-One JSON file = one resource instance. Add a file to create the resource; delete it to destroy it.
 
 ## Terraform vs OpenTofu
 

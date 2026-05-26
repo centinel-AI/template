@@ -13,18 +13,13 @@ on:
           - gcp
           - oci
           - ovh
-      project:
-        description: >
-          Project name — used as TF_VAR_project.
-          Lowercase alphanumeric and hyphens only (e.g. my-project).
+      engine:
+        description: IaC engine
         required: true
-        type: string
-        default: my-project
-      image_version:
-        description: Grauss engine image version (e.g. v0.1.0 or latest)
-        required: true
-        type: string
-        default: latest
+        type: choice
+        options:
+          - terraform
+          - opentofu
 
 permissions:
   contents: write
@@ -35,13 +30,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Validate project name
+      - name: Derive and validate project name
+        id: project
         run: |
-          PROJECT="${{ inputs.project }}"
+          PROJECT="$(echo "${{ github.event.repository.name }}" | tr '[:upper:]_' '[:lower:]-')"
           if ! echo "$PROJECT" | grep -qE '^[a-z0-9][a-z0-9-]*$'; then
-            echo "::error::Project name must be lowercase alphanumeric with hyphens and start with a letter or digit. Got: $PROJECT"
+            echo "::error::Repository name '${{ github.event.repository.name }}' cannot be used as a project name. Rename the repository to use lowercase alphanumeric characters and hyphens only."
             exit 1
           fi
+          echo "name=$PROJECT" >> "$GITHUB_OUTPUT"
 
       - name: Write grauss.json
         run: |
@@ -49,8 +46,8 @@ jobs:
           cat > grauss.json <<EOF
           {
             "cloud": "${{ inputs.cloud }}",
-            "project": "${{ inputs.project }}",
-            "image_version": "${{ inputs.image_version }}",
+            "engine": "${{ inputs.engine }}",
+            "project": "${{ steps.project.outputs.name }}",
             "template_version": "$TEMPLATE_VERSION"
           }
           EOF
@@ -62,13 +59,14 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add grauss.json
           git diff --staged --quiet && echo "Nothing to commit." || \
-            git commit -m "chore: setup ${{ inputs.cloud }} project ${{ inputs.project }}"
+            git commit -m "chore: setup ${{ inputs.cloud }}/${{ inputs.engine }} project ${{ steps.project.outputs.name }}"
           git push
 
       - name: Summary
         run: |
           CLOUD="${{ inputs.cloud }}"
-          PROJECT="${{ inputs.project }}"
+          ENGINE="${{ inputs.engine }}"
+          PROJECT="${{ steps.project.outputs.name }}"
           TEMPLATE_VERSION="$(jq -r '.template_version' grauss.json)"
 
           echo "### Grauss setup complete" >> "$GITHUB_STEP_SUMMARY"
@@ -76,13 +74,12 @@ jobs:
           echo "| | |" >> "$GITHUB_STEP_SUMMARY"
           echo "|--|--|" >> "$GITHUB_STEP_SUMMARY"
           echo "| **Cloud** | \`$CLOUD\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Engine** | \`$ENGINE\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| **Project** | \`$PROJECT\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| **Image version** | \`${{ inputs.image_version }}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| **Template version** | \`$TEMPLATE_VERSION\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "#### Next steps" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "1. Set repository variable **\`GRAUSS_IMAGE_ORG\`** (org/user publishing Grauss engine images)." >> "$GITHUB_STEP_SUMMARY"
           echo "2. Configure the **$CLOUD** credential secrets in *Settings → Secrets and variables → Actions* (see \`README.md\`)." >> "$GITHUB_STEP_SUMMARY"
-          echo "3. Replace all \`REPLACE_WITH_*\` placeholders in \`data/\` with your actual values." >> "$GITHUB_STEP_SUMMARY"
-          echo "4. Update \`data/backend.tf.json\` with your remote state backend details." >> "$GITHUB_STEP_SUMMARY"
+          echo "3. Add JSON resource files under \`data/\` following the layout in \`README.md\`." >> "$GITHUB_STEP_SUMMARY"
